@@ -71,10 +71,16 @@ start
 		cpl
 		and #f0
 		ld (wheel_old+1),a
-		ld bc,#7FFE
-		in a,(c)
-		bit 0,a		;' '
-		call nz,autoupdate		; !!!!!!!!!!!!!
+		ld a,(update_rtc_sw+1)
+		or a
+		ld (sync_time_only_sw+1),a
+		call nz,autoupdate
+		xor a
+		ld (sync_time_only_sw+1),a
+		call set_Textpage
+		ld hl,ready_message
+		ld b,1
+		call zifi_echo
 main
 sites_sw	ld a,0
 		or a
@@ -122,7 +128,8 @@ do_init_music	ld a,0
 		jp main
 
 selfupdate_msg1		db "ZiFi ver. "
-cur_version		db '0.732',0,0
+cur_version		db '0.733'
+build_date		db ' 2026-05-19',0,0
 
 autoupdate	ld hl,cur_version
 		ld de,upd_ver
@@ -135,6 +142,9 @@ autoupdate	ld hl,cur_version
 		ld b,1
 		call zifi_echo
 		ld hl,selfupdate_msg2
+		ld b,1
+		call zifi_echo
+		ld hl,time_sync_start_message
 		ld b,1
 		call zifi_echo
 		ld hl,selfupdate
@@ -154,8 +164,16 @@ autoupdate	ld hl,cur_version
 		ldir		; copy "date" folder name from server 
 update_rtc_sw	ld a,0		; need to write time to rtc?
 		or a
-		call nz,write_rtc
+		jr z,rtc_update_done
+		call write_rtc
+		ld hl,time_update_message
+		ld b,1
+		call zifi_echo
+rtc_update_done
 		pop hl
+sync_time_only_sw	ld a,0
+		or a
+		jp nz,set_download_dir
 
 		ld de,not_update_message
 		ld a,"Y"
@@ -216,9 +234,12 @@ update_rtc_sw	ld a,0		; need to write time to rtc?
 		call zifi_echo
 		jp set_download_dir
 
-wifi_connected		db 'Connected succefully',0,0
+wifi_connected		db #0d,#0a,'Connected successfully',0,0
 wifi_try_connect	db #0d,#0a,'Try connect to Access point',0,0	
 selfupdate_msg2		db "Check for updates... ",0,0
+time_sync_start_message	db "Synchronizing time...",0,0
+time_update_message	db "Time synchronized",0,0
+ready_message		db "Ready...",0,0
 checksum_error_mes	db "Checksum error, please restart",0,0
 not_update_message	db "Your ZiFi is up to date.",0,0
 update_message		db "-+- Your ZiFi is updated! -+- Please restart -+-",0,0
@@ -4064,6 +4085,7 @@ pass_ini	ld hl,0
 		jr nz,gmt_minus
 		inc hl
 2		call get_gmt
+		neg
 		ld (gmt_time+1),a
 		ret
 
@@ -4071,7 +4093,6 @@ gmt_minus	cp "-"
 		ret nz
 		inc hl
 		call get_gmt
-		neg
 		ld (gmt_time+1),a
 		ret
 
@@ -4141,15 +4162,25 @@ ini_not_found_msg	db ' Error: zifi.ini not found',0,0
 set_download_dir
 		call init_sd_card
 		call SETROOT
+		LD HL,DIR_zifi
+		CALL FENTRY
+		jr nz,zifi_dir
+		LD HL,DIR_zifi+1
+		CALL MKDIR
+		JR Z,set_download_dir
+		JP ER3
+
+zifi_dir	call SETDIR		; we in "zifi" dir
+download_dir
 		LD HL,DIR_download
 		CALL FENTRY
 		jr nz,current_dir	; Set DIR found by FENTRY active
 		LD HL,DIR_download+1
 		CALL MKDIR
-		JR Z,set_download_dir
+		JR Z,download_dir
 		JP ER3
 
-current_dir	call SETDIR		; we in "download" dir
+current_dir	call SETDIR		; we in "zifi/downloads" dir
 		LD HL,DIR_date		; check current date dir
 		CALL FENTRY
 		jr nz,sd_exit_date		; Set DIR found by FENTRY active
@@ -4488,14 +4519,15 @@ init_zifi
 		call zifi_send
 ;ld hl,cmd_uart
 ;		call zifi_send
-		ld hl,cmd_gmr
-		call zifi_send_echo
+;		ld hl,cmd_gmr
+;		call zifi_send_echo
 		ld hl,cmd_cwmode
 		call zifi_send
 		ld hl,cmd_cwautoconn
 		call zifi_send
 		ld hl,cmd_cipmux
 		call zifi_send
+		call clear_input_fifo
 ;		ld hl,cmd_cwqap	; Disconnect from AP 
 ;		call zifi_send
 ;		ld b,25
@@ -4514,6 +4546,7 @@ init_zifi
 ;        	cp low output_buff+#bf
         	jr nz,2b
         	ld hl,wifi_connected
+        	ld b,2
 		jp zifi_echo
 ;		ld b,25
 ;		call wait
